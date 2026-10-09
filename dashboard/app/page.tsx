@@ -4,14 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import mqtt, { type MqttClient } from 'mqtt';
 import QRCode from 'qrcode';
 import { kindOf, isUnregistered, type Kind } from '@/lib/instruments';
-import { BROKER, TOPIC, readPass, savePass, InstrumentIcon, InstrumentArt, ago, fmtTime, SERIES, OTHER, Skeleton } from './ui';
-import { procedureById } from '@/lib/procedures';
+import { NavLinks, BROKER, TOPIC, readPass, savePass, InstrumentIcon, InstrumentArt, ago, fmtTime, SERIES, OTHER, Skeleton } from './ui';
+import type { Procedure } from '@/lib/procedures';
 import { analyze, fmtClock as fmtClockShort, type Surgery, type SurgeryScan } from '@/lib/surgery';
-import { StartSurgeryDialog, EndSurgeryDialog, LiveSurgeryPanel, SurgeryRecords, TrayWindow, type SurgerySummary } from './surgery-ui';
+import { StartSurgeryDialog, EndSurgeryDialog, LiveSurgeryPanel, SurgeryRecords, TrayWindow, PasscodeDialog, adminPost, type SurgerySummary } from './surgery-ui';
 import Link from 'next/link';
 import { FloatingIcons } from './effects';
 
-type Scan = { scanId: number; name: string; rfidUid: string; time: string; delayed?: boolean };
+type Scan = { scanId: number; name: string; rfidUid: string; time: string; delayed?: boolean; manual?: boolean };
 type Device = { online: boolean; rssi?: number; uptimeS?: number; reader?: 'ok' | 'lost'; queued?: number; ip?: string; receivedAt: number };
 
 // No heartbeat for this long = treat the scanner as offline (it sends one every 5s).
@@ -345,6 +345,8 @@ export default function Home() {
   const [startOpen, setStartOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
   const [justEnded, setJustEnded] = useState<Surgery | null>(null);
+  const [procedures, setProcedures] = useState<Procedure[]>([]);
+  const [passFor, setPassFor] = useState<(() => void) | null>(null); // action waiting for the admin passcode
   const surgeryRef = useRef<Surgery | null>(null);
   useEffect(() => { surgeryRef.current = surgery; }, [surgery]);
 
@@ -364,6 +366,7 @@ export default function Home() {
     const twelveAgo = new Date(Date.now() - 12 * 3600_000);
     const since = twelveAgo < midnight ? twelveAgo : midnight;
     fetch(`/api/activity?since=${since.toISOString()}`).then(json).then(setHits).catch(() => {});
+    fetch('/api/procedures').then(json).then(setProcedures).catch(() => {});
     fetch('/api/surgeries/active').then(json).then((d) => { if (d) { setSurgery(d.surgery); setSurgeryScans(d.scans); } }).catch(() => {});
     loadRecords();
     fetch(`/api/usage?since=${midnight.toISOString()}`).then((r) => r.json()).then((rows) => setUsageToday(toMap(rows))).catch(() => {});
@@ -380,7 +383,9 @@ export default function Home() {
       setUsageAll(bump);
       setHits((prev) => [...prev, { time: s.time, rfidUid: s.rfidUid }]);
       const live = surgeryRef.current;
-      if (live && new Date(s.time) >= new Date(live.startedAt)) setSurgeryScans((prev) => [...prev, { time: s.time, rfidUid: s.rfidUid, name: s.name }]);
+      if (live && new Date(s.time) >= new Date(live.startedAt)) {
+        setSurgeryScans((prev) => (prev.some((p) => p.scanId === s.scanId) ? prev : [...prev, { scanId: s.scanId, time: s.time, rfidUid: s.rfidUid, name: s.name, manual: s.manual }]));
+      }
       setPulse((p) => p + 1);
       setToasts((prev) => [s, ...prev.filter((t) => t.scanId !== s.scanId)].slice(0, 3));
       setTimeout(() => setToasts((prev) => prev.filter((t) => t.scanId !== s.scanId)), 4500);
@@ -474,8 +479,21 @@ export default function Home() {
     return i >= 0 && i < SERIES.length ? SERIES[i] : OTHER;
   };
 
-  const procedure = surgery ? procedureById(surgery.procedureId) : null;
-  const surgeryAnalysis = surgery && procedure && now ? analyze(surgeryScans, procedure.steps, new Date(surgery.startedAt).getTime(), Math.max(now, new Date(surgery.startedAt).getTime())) : null;
+  const surgeryAnalysis = surgery && now ? analyze(surgeryScans, surgery.plan, new Date(surgery.startedAt).getTime(), Math.max(now, new Date(surgery.startedAt).getTime())) : null;
+
+  // Manual take/return for a missed tap. The result is broadcast like a reader
+  // scan, so every open dashboard (and this one, via the echo) updates.
+  const correct = async (uid: string): Promise<string | null> => {
+    if (!surgery) return null;
+    try {
+      const ev = await adminPost<Scan>(`/api/surgeries/${surgery.id}/correct`, { rfidUid: uid }, null);
+      mqttRef.current?.publish(`${TOPIC}/scan`, JSON.stringify(ev));
+      return null;
+    } catch (e) {
+      if ((e as Error).message === 'PASSCODE') { setPassFor(() => () => correct(uid)); return null; }
+      return (e as Error).message;
+    }
+  };
   const toolRows = registry.map((t) => ({ uid: t.rfidUid, name: t.name, color: colorOf(t.rfidUid) }));
 
 
@@ -514,12 +532,13 @@ export default function Home() {
               <h1 className="text-[17px] font-semibold tracking-tight text-slate-900">Smart OR Tracking</h1>
               <p className="text-xs text-slate-600">Surgical Instrument Management · <span className="text-blue-700">Operating Room 1</span></p>
             </div>
+            <NavLinks />
           </div>
 
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 sm:flex">
-              <span className="text-slate-500">{now ? clock.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) : ''}</span>
-              <span className="h-3 w-px bg-slate-200" />
+              <span className="hidden text-slate-500 2xl:inline">{now ? clock.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) : ''}</span>
+              <span className="hidden h-3 w-px bg-slate-200 2xl:inline" />
               <span className="font-mono font-semibold tabular-nums">{now ? clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</span>
             </div>
             {surgery ? (
@@ -559,15 +578,15 @@ export default function Home() {
 
       <div className="relative mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-8">
 
-        {surgery && procedure && surgeryAnalysis && (
-          <div id="surgery" className="scroll-mt-4">
-            <LiveSurgeryPanel surgery={surgery} procedure={procedure} analysis={surgeryAnalysis} rows={toolRows} now={now} onEnd={() => setEndOpen(true)} />
+        {surgery && surgeryAnalysis && (
+          <div id="surgery" className="scroll-mt-20">
+            <LiveSurgeryPanel surgery={surgery} analysis={surgeryAnalysis} rows={toolRows} now={now} onEnd={() => setEndOpen(true)} onCorrect={correct} />
           </div>
         )}
         {!surgery && justEnded && (
           <div className="card-in flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-5 py-3.5">
             <div className="text-sm text-emerald-800">
-              <span className="font-semibold">Surgery ended.</span> {procedureById(justEnded.procedureId)?.name} by {justEnded.surgeon} has been saved.
+              <span className="font-semibold">Surgery ended.</span> {justEnded.procedureName} by {justEnded.surgeon} has been saved.
             </div>
             <div className="flex items-center gap-3">
               <Link href={`/surgery/${justEnded.id}`} className="rounded-lg bg-emerald-700 px-4 py-1.5 text-sm font-bold text-white hover:bg-emerald-800">View report</Link>
@@ -716,6 +735,7 @@ export default function Home() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-slate-900">{s.name}</span>
+                        {s.manual && <span title="Entered by hand to fix a missed tap" className="shrink-0 rounded bg-slate-100 px-1.5 py-px text-xs font-semibold text-slate-600 ring-1 ring-slate-300">corrected</span>}
                         {s.delayed && <span title="Scanned while offline, delivered when the scanner reconnected" className="shrink-0 rounded bg-amber-50 px-1.5 py-px text-xs font-semibold text-amber-800 ring-1 ring-amber-300">synced late</span>}
                       </div>
                     </div>
@@ -839,7 +859,7 @@ export default function Home() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-bold text-slate-900">{t.name}</div>
-                <div className="text-xs text-slate-600">{t.delayed ? `Synced late · scanned ${fmtTime(t.time)}` : 'Scanned just now'}</div>
+                <div className="text-xs text-slate-600">{t.manual ? 'Corrected by hand' : t.delayed ? `Synced late · scanned ${fmtTime(t.time)}` : 'Scanned just now'}</div>
               </div>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
             </div>
@@ -852,10 +872,12 @@ export default function Home() {
       {loaded && <TrayWindow analysis={surgeryAnalysis} rows={toolRows} now={now} live={!!surgery} />}
       {startOpen && (
         <StartSurgeryDialog
+          procedures={procedures}
           onClose={() => setStartOpen(false)}
           onStarted={(sg) => { setStartOpen(false); setSurgery(sg); setSurgeryScans([]); setJustEnded(null); broadcastSurgery('start', sg); loadRecords(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
         />
       )}
+      {passFor && <PasscodeDialog onClose={() => setPassFor(null)} then={passFor} />}
       {endOpen && surgery && surgeryAnalysis && (
         <EndSurgeryDialog
           surgery={surgery}

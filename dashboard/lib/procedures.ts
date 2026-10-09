@@ -1,64 +1,48 @@
 import type { Kind } from './instruments';
 
-// Recommended instrument sequences for a few minor procedures, limited to the
-// instruments that are tagged and in use (towel clamps, tissue forceps, Mayo
-// scissors - the scalpel step is done untracked). These are trial plans for the demo,
-// not clinical guidance - the surgeon is free to use instruments in any order.
-export type Step = { tool: Exclude<Kind, 'generic'>; purpose: string };
-export type Procedure = { id: string; name: string; summary: string; estMinutes: number; steps: Step[] };
+// Procedures and their recommended instrument plans live in the or_procedures
+// table and are edited from the dashboard (/procedures). Plans are trial
+// sequences for the demo, not clinical guidance - the surgeon is free to use
+// instruments in any order.
+export const STEP_TOOLS = ['clamp', 'forceps', 'scissors', 'scalpel'] as const;
+export type StepTool = (typeof STEP_TOOLS)[number];
+export type Step = { tool: StepTool; purpose: string };
 
-export const PROCEDURES: Procedure[] = [
-  {
-    id: 'lesion-excision',
-    name: 'Skin Lesion Excision',
-    summary: 'Elliptical excision of a small skin lesion with primary closure.',
-    estMinutes: 25,
-    steps: [
-      { tool: 'clamp', purpose: 'Secure sterile drapes around the field' },
-      { tool: 'forceps', purpose: 'Lift the skin edge and hold the specimen' },
-      { tool: 'scissors', purpose: 'Free the specimen from subcutaneous tissue' },
-      { tool: 'forceps', purpose: 'Evert wound edges while suturing' },
-      { tool: 'scissors', purpose: 'Cut sutures' },
-    ],
-  },
-  {
-    id: 'laceration-repair',
-    name: 'Laceration Repair',
-    summary: 'Clean, debride and suture a simple skin laceration.',
-    estMinutes: 20,
-    steps: [
-      { tool: 'clamp', purpose: 'Secure sterile drapes around the wound' },
-      { tool: 'forceps', purpose: 'Explore the wound and remove debris' },
-      { tool: 'scissors', purpose: 'Trim devitalised wound edges' },
-      { tool: 'forceps', purpose: 'Evert wound edges while suturing' },
-      { tool: 'scissors', purpose: 'Cut sutures' },
-    ],
-  },
-  {
-    id: 'abscess-drainage',
-    name: 'Abscess Incision & Drainage',
-    summary: 'Open and drain a superficial skin abscess and pack the cavity.',
-    estMinutes: 15,
-    steps: [
-      { tool: 'clamp', purpose: 'Secure sterile drapes around the abscess' },
-      { tool: 'forceps', purpose: 'Explore the cavity and break up loculations' },
-      { tool: 'scissors', purpose: 'Trim wound edges / cut packing gauze' },
-      { tool: 'forceps', purpose: 'Insert packing into the cavity' },
-    ],
-  },
-  {
-    id: 'cyst-removal',
-    name: 'Sebaceous Cyst Removal',
-    summary: 'Excise an epidermoid (sebaceous) cyst intact, then close.',
-    estMinutes: 30,
-    steps: [
-      { tool: 'clamp', purpose: 'Secure sterile drapes around the field' },
-      { tool: 'forceps', purpose: 'Grasp and retract the skin edge' },
-      { tool: 'scissors', purpose: 'Dissect around the cyst wall' },
-      { tool: 'forceps', purpose: 'Deliver the cyst intact' },
-      { tool: 'scissors', purpose: 'Cut sutures' },
-    ],
-  },
-];
+export type Procedure = {
+  id: string;
+  name: string;
+  summary: string;
+  estMinutes: number;
+  alertMinutes: number; // warn when an instrument has been out longer than this
+  steps: Step[];
+  sort: number;
+  active: boolean;
+};
 
-export const procedureById = (id: string) => PROCEDURES.find((p) => p.id === id) ?? null;
+export type ProcedureInput = Pick<Procedure, 'name' | 'summary' | 'estMinutes' | 'alertMinutes' | 'steps'>;
+
+const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) ? v : NaN);
+
+// Validates a procedure coming from the editor. Returns the cleaned value or an error message.
+export function parseProcedureInput(body: Record<string, unknown>): ProcedureInput | string {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const summary = typeof body.summary === 'string' ? body.summary.trim() : '';
+  const estMinutes = int(body.estMinutes);
+  const alertMinutes = int(body.alertMinutes);
+  if (!name || name.length > 60) return 'Name is required (max 60 characters)';
+  if (summary.length > 200) return 'Summary is too long (max 200 characters)';
+  if (!(estMinutes >= 1 && estMinutes <= 600)) return 'Estimated duration must be 1-600 minutes';
+  if (!(alertMinutes >= 1 && alertMinutes <= 240)) return 'Instrument alert must be 1-240 minutes';
+  if (!Array.isArray(body.steps) || body.steps.length < 1 || body.steps.length > 20) return 'Add between 1 and 20 steps';
+  const steps: Step[] = [];
+  for (const [i, raw] of (body.steps as unknown[]).entries()) {
+    const s = raw as Record<string, unknown>;
+    const purpose = typeof s?.purpose === 'string' ? s.purpose.trim() : '';
+    if (!STEP_TOOLS.includes(s?.tool as StepTool)) return `Step ${i + 1}: choose an instrument`;
+    if (!purpose || purpose.length > 120) return `Step ${i + 1}: describe what it is for (max 120 characters)`;
+    steps.push({ tool: s.tool as StepTool, purpose });
+  }
+  return { name, summary, estMinutes, alertMinutes, steps };
+}
+
+export const isStepTool = (k: Kind): k is StepTool => (STEP_TOOLS as readonly string[]).includes(k);

@@ -1,7 +1,52 @@
 "use client";
 
 // Pieces shared by the dashboard and the surgery report page.
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import type { Kind } from '@/lib/instruments';
+
+const NAV = [
+  { href: '/', label: 'Dashboard' },
+  { href: '/analytics', label: 'Analytics' },
+  { href: '/procedures', label: 'Procedures' },
+];
+
+export function NavLinks() {
+  const path = usePathname();
+  return (
+    <nav className="ml-2 hidden items-center gap-1 md:flex">
+      {NAV.map((n) => {
+        const on = n.href === '/' ? path === '/' : path.startsWith(n.href);
+        return (
+          <Link key={n.href} href={n.href} className={`rounded-md px-3 py-1.5 text-sm font-medium ${on ? 'bg-blue-50 text-blue-800' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+            {n.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+// Top bar for the secondary pages (analytics, procedures, reports).
+export function PageHeader({ right }: { right?: React.ReactNode }) {
+  return (
+    <header className="sticky top-0 z-20 border-b border-slate-200 bg-white print:hidden">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8">
+        <div className="flex items-center gap-3.5">
+          <Link href="/" className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-700">
+            <svg width="24" height="24" viewBox="0 0 24 24"><path d="M9.5 3.5h5v6h6v5h-6v6h-5v-6h-6v-5h6z" fill="white" /></svg>
+          </Link>
+          <div>
+            <div className="text-[17px] font-semibold tracking-tight text-slate-900">Smart OR Tracking</div>
+            <p className="text-xs text-slate-600">Surgical Instrument Management · <span className="text-blue-700">Operating Room 1</span></p>
+          </div>
+          <NavLinks />
+        </div>
+        {right}
+      </div>
+    </header>
+  );
+}
 
 // Live updates come straight from the public MQTT broker over WebSockets (the
 // ESP32 publishes there); history and renames go through this app's /api routes.

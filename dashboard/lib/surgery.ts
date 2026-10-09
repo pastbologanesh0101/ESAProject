@@ -5,8 +5,19 @@ import type { Step } from './procedures';
 // Each instrument's taps alternate: the 1st tap means it was taken from the
 // tray, the 2nd that it was put back, the 3rd taken again, and so on.
 
-export type SurgeryScan = { time: string; rfidUid: string; name: string };
-export type Surgery = { id: number; procedureId: string; surgeon: string; startedAt: string; endedAt: string | null };
+export type SurgeryScan = { scanId?: number; time: string; rfidUid: string; name: string; manual?: boolean };
+// A surgery keeps a snapshot of the plan it was started with.
+export type Surgery = {
+  id: number;
+  procedureId: string;
+  procedureName: string;
+  surgeon: string;
+  startedAt: string;
+  endedAt: string | null;
+  plan: Step[];
+  estMinutes: number;
+  alertMinutes: number;
+};
 
 export type Cycle = {
   uid: string;
@@ -14,6 +25,7 @@ export type Cycle = {
   kind: Kind;
   takenAt: number;
   returnedAt: number | null; // null = still out
+  corrected: boolean; // the take or return was entered by hand, not tapped
   stepIndex: number | null; // plan step this use was matched to, if any
   inOrder: boolean; // its step came after the previous matched use's step
 };
@@ -36,6 +48,7 @@ export type Analysis = {
   idleMs: number; // time with no instrument out
   longestIdleMs: number;
   firstToolMs: number | null; // from start until the first instrument was taken
+  corrections: number; // taps entered by hand
 };
 
 export function analyze(scans: SurgeryScan[], steps: Step[], startMs: number, endMs: number): Analysis {
@@ -56,6 +69,7 @@ export function analyze(scans: SurgeryScan[], steps: Step[], startMs: number, en
         kind: kindOf(taps[i].name),
         takenAt: taps[i].t,
         returnedAt: taps[i + 1]?.t ?? null,
+        corrected: !!taps[i].manual || !!taps[i + 1]?.manual,
         stepIndex: null,
         inOrder: false,
       });
@@ -119,6 +133,7 @@ export function analyze(scans: SurgeryScan[], steps: Step[], startMs: number, en
     idleMs: Math.max(0, durationMs - busyMs),
     longestIdleMs,
     firstToolMs: cycles.length ? cycles[0].takenAt - startMs : null,
+    corrections: sorted.filter((s) => s.manual).length,
   };
 }
 

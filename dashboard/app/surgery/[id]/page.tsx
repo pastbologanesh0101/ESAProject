@@ -4,9 +4,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { KIND_LABEL } from '@/lib/instruments';
-import { procedureById } from '@/lib/procedures';
 import { analyze, fmtClock, fmtDuration, type Surgery, type SurgeryScan } from '@/lib/surgery';
-import { InstrumentIcon, SERIES, OTHER, Skeleton } from '../../ui';
+import { InstrumentIcon, PageHeader, SERIES, OTHER, Skeleton } from '../../ui';
 import { SurgeryTimeline } from '../../surgery-ui';
 import { FloatingIcons } from '../../effects';
 
@@ -43,7 +42,8 @@ export default function SurgeryReport() {
   if (error) return <div className="flex min-h-screen items-center justify-center bg-[#f3f5f8] text-slate-600">{error} · <Link href="/" className="ml-2 text-blue-700">Back to dashboard</Link></div>;
 
   const surgery = data?.surgery;
-  const proc = surgery ? procedureById(surgery.procedureId) : null;
+  // The plan snapshot the surgery was started with.
+  const proc = surgery ? { name: surgery.procedureName, estMinutes: surgery.estMinutes, steps: surgery.plan } : null;
   const startMs = surgery ? new Date(surgery.startedAt).getTime() : 0;
   // eslint-disable-next-line react-hooks/purity -- an in-progress surgery's report is a snapshot up to "now"
   const endMs = surgery ? (surgery.endedAt ? new Date(surgery.endedAt).getTime() : Date.now()) : 0;
@@ -59,11 +59,9 @@ export default function SurgeryReport() {
   return (
     <div className="min-h-screen bg-[#f3f5f8] font-sans text-slate-900">
       <div className="print:hidden"><FloatingIcons /></div>
+      <PageHeader right={<button onClick={() => window.print()} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700">Print / Save PDF</button>} />
       <div className="relative mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-8">
-        <div className="flex items-center justify-between print:hidden">
-          <Link href="/" className="text-sm font-semibold text-slate-600 hover:text-blue-700">← Dashboard</Link>
-          <button onClick={() => window.print()} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700">Print / Save PDF</button>
-        </div>
+        <Link href="/" className="text-sm font-medium text-slate-600 hover:text-blue-700 print:hidden">← Back to dashboard</Link>
 
         {!a || !surgery || !proc ? (
           <div className="space-y-4"><Skeleton className="h-24" /><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24" />)}</div><Skeleton className="h-48" /></div>
@@ -99,6 +97,7 @@ export default function SurgeryReport() {
               <Stat label="Longest idle gap" value={fmtDuration(a.longestIdleMs)} />
               <Stat label="First instrument" value={a.firstToolMs !== null ? `T+${fmtClock(a.firstToolMs)}` : '—'} sub="after the start" />
               <Stat label="Not returned" value={a.stillOut.length} tone={a.stillOut.length ? 'bad' : 'good'} sub={a.stillOut.length ? 'check the tray' : 'all instruments back'} />
+              {a.corrections > 0 && <Stat label="Manual corrections" value={a.corrections} sub="taps entered by hand (missed or double taps)" />}
             </div>
 
             <section className={card}>
@@ -125,7 +124,7 @@ export default function SurgeryReport() {
                             <td className="px-5 py-2.5 font-mono text-xs text-slate-500">{i + 1}</td>
                             <td className="py-2.5"><span className="inline-flex items-center gap-2"><span className="text-blue-700"><InstrumentIcon kind={st.tool} size={15} /></span><span className="font-medium text-slate-900">{KIND_LABEL[st.tool]}</span></span><div className="text-xs text-slate-600">{st.purpose}</div></td>
                             <td className="py-2.5 font-mono text-xs text-slate-700">{c ? `T+${fmtClock(c.takenAt - startMs)}` : '—'}</td>
-                            <td className="py-2.5 font-mono text-xs text-slate-700">{c ? (c.returnedAt ? fmtDuration(c.returnedAt - c.takenAt) : 'not returned') : '—'}</td>
+                            <td className="py-2.5 font-mono text-xs text-slate-700">{c ? (c.returnedAt ? fmtDuration(c.returnedAt - c.takenAt) : 'not returned') : '—'}{c?.corrected && <span title="Take or return entered by hand" className="ml-1.5 rounded bg-slate-100 px-1 font-sans text-[10px] text-slate-600">corrected</span>}</td>
                             <td className="px-5 py-2.5">{!c ? <span className="text-xs text-slate-500">skipped</span> : c.inOrder ? <span className="text-xs font-semibold text-emerald-700">✓ in order</span> : <span className="text-xs font-semibold text-amber-800">out of order</span>}</td>
                           </tr>
                         );
